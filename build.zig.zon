@@ -1,0 +1,11 @@
+.{
+    .name = "zig-curl",
+    .version = "0.1.0",
+    .paths = .{
+        "src",
+        "example",
+        "build.zig",
+        "build.zig.zon",
+        "README.md",
+    },
+}

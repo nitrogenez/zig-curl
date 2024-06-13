@@ -6,18 +6,18 @@ const c = @cImport({
 });
 const testing = std.testing;
 
-const func = fn ([]const u8) anyerror!usize;
+const Func = fn ([]const u8) anyerror!usize;
 
-pub const context = struct {
-    resp: response,
+pub const Context = struct {
+    resp: Response,
     curl: ?*c.CURL,
-    cb: ?func,
+    cb: ?Func,
 };
 
-pub const response = struct {
+pub const Response = struct {
     allocator: std.mem.Allocator,
     status: c_long,
-    headers: headers,
+    headers: Headers,
 
     const Self = @This();
 
@@ -25,7 +25,7 @@ pub const response = struct {
         return Self{
             .allocator = allocator,
             .status = 0,
-            .headers = std.ArrayList(header).init(allocator),
+            .headers = std.ArrayList(Header).init(allocator),
         };
     }
 
@@ -38,33 +38,35 @@ pub const response = struct {
     }
 };
 
-pub const request = struct {
+pub const Request = struct {
     allocator: std.mem.Allocator,
-    cb: ?func = null,
-    headers: ?*headers = null,
+    cb: ?Func = null,
+    headers: ?*Headers = null,
     body: ?*[]const u8 = null,
     timeout: i32 = -1,
     sslVerify: bool = true,
     cainfo: ?[]const u8 = null,
-    response: ?*response = null,
+    response: ?*Response = null,
 };
 
-pub const header = struct {
+pub const Header = struct {
     name: []const u8,
     value: []const u8,
 };
 
-pub const headers = std.ArrayList(header);
+pub const Headers = std.ArrayList(Header);
 
-fn headerFn(ptr: [*]const u8, size: usize, nmemb: usize, ctx: *context) usize {
+fn headerFn(ptr: [*]const u8, size: usize, nmemb: usize, ctx: *Context) usize {
     const data = ptr[0 .. size * nmemb];
+
     if (ctx.resp.status == 0) {
         _ = c.curl_easy_getinfo(ctx.curl, c.CURLINFO_RESPONSE_CODE, &ctx.resp.status);
     }
+
     var i: usize = 0;
     while (i < data.len) : (i += 1) {
         if (data[i] == ':') {
-            var h: header = undefined;
+            var h: Header = undefined;
             h.name = ctx.resp.allocator.dupe(u8, data[0..i]) catch unreachable;
             while (i < data.len and std.ascii.isSpace(data[i + 1])) : (i += 1) {}
             h.value = ctx.resp.allocator.dupe(u8, data[i..]) catch unreachable;
@@ -75,12 +77,12 @@ fn headerFn(ptr: [*]const u8, size: usize, nmemb: usize, ctx: *context) usize {
     return size * nmemb;
 }
 
-fn writeFn(ptr: [*]const u8, size: usize, nmemb: usize, ctx: *context) usize {
+fn writeFn(ptr: [*]const u8, size: usize, nmemb: usize, ctx: *Context) usize {
     const data = ptr[0 .. size * nmemb];
     return ctx.cb.?(data) catch 0;
 }
 
-pub fn send(method: []const u8, url: []const u8, req: request) !u32 {
+pub fn send(method: []const u8, url: []const u8, req: Request) !u32 {
     var curl: ?*c.CURL = undefined;
     var res: c.CURLcode = undefined;
     curl = c.curl_easy_init();
@@ -89,29 +91,28 @@ pub fn send(method: []const u8, url: []const u8, req: request) !u32 {
     }
     defer c.curl_easy_cleanup(curl);
     if (std.mem.eql(u8, method, "POST")) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_POST), @as(c_long, 1));
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_POST, 1.0);
     } else if (!std.mem.eql(u8, method, "GET")) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_CUSTOMREQUEST), @ptrCast([*]const u8, method));
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_CUSTOMREQUEST, @as([*c]const u8, @ptrCast(method.ptr)));
     }
 
-    if (req.sslVerify) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_SSL_VERIFYPEER), @as(c_long, 1));
-    }
-    _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_SSL_VERIFYPEER), @as(c_long, 1));
-    if (req.timeout >= 0) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_TIMEOUT), @as(c_long, req.timeout));
-    }
+    if (req.sslVerify) _ = c.curl_easy_setopt(curl, c.CURLOPT_SSL_VERIFYPEER, 1.0);
+    _ = c.curl_easy_setopt(curl, c.CURLOPT_SSL_VERIFYPEER, 1.0);
+
+    if (req.timeout >= 0) _ = c.curl_easy_setopt(curl, c.CURLOPT_TIMEOUT, req.timeout);
+
     if (req.cainfo != null and req.cainfo.?.len > 0) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_CAINFO), req.cainfo.?);
-    } else {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_CAINFO), @as(c_long, 0));
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_CAINFO, req.cainfo.?);
+    }
+    else {
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_CAINFO, 0.0);
     }
 
-    var ctx: context = .{
+    var ctx: Context = .{
         .resp = .{
             .allocator = req.allocator,
             .status = 0,
-            .headers = headers.init(req.allocator),
+            .headers = Headers.init(req.allocator),
         },
         .curl = curl,
         .cb = req.cb,
@@ -127,13 +128,15 @@ pub fn send(method: []const u8, url: []const u8, req: request) !u32 {
             req.response.?.* = ctx.resp;
         }
     }
-    _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_URL), @ptrCast([*]const u8, url));
-    _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_FOLLOWLOCATION), @as(c_long, 1));
-    _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_HEADERFUNCTION), headerFn);
-    _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_HEADERDATA), &ctx);
+
+    _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*c]const u8, @ptrCast(url.ptr)));
+    _ = c.curl_easy_setopt(curl, c.CURLOPT_FOLLOWLOCATION, 1.0);
+    _ = c.curl_easy_setopt(curl, c.CURLOPT_HEADERFUNCTION, headerFn);
+    _ = c.curl_easy_setopt(curl, c.CURLOPT_HEADERDATA, &ctx);
+
     if (req.cb != null) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_WRITEFUNCTION), writeFn);
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_WRITEDATA), &ctx);
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_WRITEFUNCTION, writeFn);
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_WRITEDATA, &ctx);
     }
 
     if (req.headers != null) {
@@ -142,14 +145,14 @@ pub fn send(method: []const u8, url: []const u8, req: request) !u32 {
             var bytes = std.ArrayList(u8).init(req.allocator);
             defer bytes.deinit();
             try bytes.writer().print("{s}: {s}", .{ he.name, he.value });
-            headerlist = c.curl_slist_append(headerlist, @ptrCast([*]const u8, bytes.items));
+            headerlist = c.curl_slist_append(headerlist, @as([*c]const u8, @ptrCast(bytes.items.ptr)));
         }
         _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headerlist);
         defer c.curl_slist_free_all(headerlist);
     }
     if (req.body != null) {
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_POST), @as(c_long, 1));
-        _ = c.curl_easy_setopt(curl, @bitCast(c_uint, c.CURLOPT_POSTFIELDS), @ptrCast([*]const u8, req.body));
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_POST, @as(c_long, 1));
+        _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, (@ptrCast(req.body.?.ptr)));
     }
     res = c.curl_easy_perform(curl);
     return @as(u32, res);
